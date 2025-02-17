@@ -5,6 +5,7 @@ import uuid
 import time
 from app.schemas import JobSubmission
 from app.job_store import add_job, get_job, update_job
+from app.workflow import run_full_workflow
 
 app = FastAPI(
     title="Manim Video Rendering Workflow API",
@@ -34,11 +35,13 @@ def process_job(job_id: str, submission: JobSubmission) -> None:
     """
     # Update job status to processing
     update_job(job_id, status="processing", logs=["Started processing job."], message="Processing started.")
-    # Call the workflow to process the submission
-    from app.workflow import process_question
-    result = process_question(submission)
-    # Final update for completion with the result from the workflow
-    update_job(job_id, status="completed", logs=result["logs"], message="Job completed successfully.", result=result["result"])
+    # Call the workflow to process the submission using the refactored function.
+    from app.workflow import run_full_workflow
+    result = run_full_workflow(submission.question)
+    # If available, extract the video file name from execution_result.
+    video_file = result.get("execution_result", {}).get("scene_file", "Unknown")
+    # Final update for completion with the obtained result.
+    update_job(job_id, status="completed", logs=result["logs"], message="Job completed successfully.", result=video_file)
     
     # Send email notification if an email is provided
     if submission.email:
@@ -46,7 +49,7 @@ def process_job(job_id: str, submission: JobSubmission) -> None:
         subject = "Your Manim Video Rendering is Complete"
         content = (
             f"Hello,\n\nYour job with ID {job_id} has been completed successfully.\n"
-            f"Video file: {result['result']}\n\nThank you."
+            f"Video file: {video_file}\n\nThank you."
         )
         send_email_notification(submission.email, subject, content)
 

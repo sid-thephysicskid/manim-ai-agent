@@ -55,3 +55,23 @@ def test_generate_and_status():
     
     assert completed, "Job did not complete in expected time."
     assert job_status["result"] is not None 
+
+def test_health_check():
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+def test_generate_job():
+    payload = {
+        "question": "What is the GCF of 18 and 24?",
+        "rendering_quality": "medium",
+        "duration_detail": "normal",
+        "user_level": "college",
+        "voice_model": "nova",
+        "email": "user@example.com"
+    }
+    response = client.post("/api/generate", json=payload)
+    assert response.status_code == 202
+    data = response.json()
+    assert "job_id" in data
+    assert data["status"] == "queued" 
