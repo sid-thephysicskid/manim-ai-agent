@@ -1,221 +1,216 @@
 # app/workflow.py
 """
-Production-ready workflow module.
+Refactored workflow module.
 
-This module refactors the full end-to-end workflow you tested in workflow_beta.py
-into a set of modular nodes:
-  - Plan Generation: Uses an LLM to generate an animation plan.
-  - Code Generation: Uses an LLM to produce complete Manim code based on the plan.
-  - Execution: Writes the generated code to a file and calls Manim to render the animation.
-  - Error Correction: (A dummy placeholder that can be extended.)
-  
-In addition, every node logs its state transitions (before and after execution) including
-timings and errors. These logs and metrics can be persisted and later analyzed to drive data‑driven
-improvements—such as refining prompts or fine‑tuning LLM configurations.
+This module encapsulates the end-to-end workflow into a single class,
+WorkflowRunner, which implements the following stages:
+  1. Plan Generation (e.g., using an LLM to generate a plan)
+  2. Code Generation (producing complete Manim code based on the plan)
+  3. Code Execution (writes the generated code to disk and runs Manim)
+  4. Voiceover Integration (integrates simulated voiceover)
+  5. Error Correction (attempts a dummy error correction if needed)
+
+Each stage logs its progress and updates an internal state dictionary.
+Logs are persisted locally (which can later be replaced with bucket storage).
 """
 
 import os
 import time
 import uuid
+import json
 import logging
 import subprocess
 import tempfile
+from typing import Dict, Any
 
-from app.schemas import JobSubmission  # if needed for type hints
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# Settings – adjust these or import from your config
-EXECUTION_TIMEOUT = 180  # seconds to wait for code execution
+# Global constants – these mirror the ones from your legacy workflow.
+EXECUTION_TIMEOUT = 180  # seconds
 MANIM_QUALITY = "-ql"    # low-quality flag for quick rendering
 
-def log_state_transition(node_name, previous_state, new_state):
-    """
-    Logs the transition between workflow nodes.
-    The log entry contains the node name, a timestamp, and snapshots of the state 
-    before and after the node execution.
-    """
-    entry = {
-        "node": node_name,
-        "timestamp": time.time(),
-        "state_before": previous_state.copy(),  # shallow copy
-        "state_after": new_state.copy()
-    }
-    new_state.setdefault("transition_logs", []).append(entry)
-    logger.info(f"Transition [{node_name}]: {entry}")
-    return new_state
+logger = logging.getLogger("workflow")
+logger.setLevel(logging.INFO)
 
-# ============================================================================
-# These helper functions encapsulate the LLM calls/prompts from your tested
-# workflow_beta.py. Replace the placeholder implementations with your
-# actual integration as needed.
-# ============================================================================
 
-def generate_plan_with_llm(prompt: str) -> str:
-    """
-    Call the LLM (or use your tested logic from workflow_beta.py) to generate a plan.
-    Replace this placeholder with your actual API call / prompt logic.
-    """
-    logger.info("Generating plan with prompt: " + prompt)
-    # Simulate delay and return a tested/expected plan
-    time.sleep(1)
-    return "Simulated plan: " + prompt
+class WorkflowRunner:
+    def __init__(self, user_input: str):
+        self.state: Dict[str, Any] = {
+            "user_input": user_input,
+            "logs": [],
+            "start_time": time.time(),
+            "status": "initialized",
+            "plan": None,
+            "generated_code": None,
+            "execution_result": None,
+            "voiceover": None,
+            "error": None,
+        }
+        self.log("Workflow initialized.")
 
-def generate_code_with_llm(prompt: str) -> str:
-    """
-    Call the LLM (or use your tested logic from workflow_beta.py) to generate Manim code.
-    Replace this placeholder with your actual code generation logic.
-    """
-    logger.info("Generating code with prompt: " + prompt)
-    # Simulate delay and return code similar to what you tested in workflow_beta.py
-    time.sleep(1)
-    return (
-        "from manim import *\n\n"
-        "class GeneratedScene(Scene):\n"
-        "    def construct(self):\n"
-        f"        self.add(Text('Animation for: {prompt}'))\n"
-    )
+    def log(self, message: str) -> None:
+        logger.info(message)
+        self.state["logs"].append(message)
 
-# ============================================================================
-# Workflow Node implementations use the above helper functions.
-# ============================================================================
+    def plan_generation(self):
+        """Generate a detailed plan from the provided user input using an LLM (simulated)."""
+        prompt = f"Generate a detailed plan for: {self.state['user_input']}"
+        self.log(f"Plan generation started with prompt: {prompt}")
+        try:
+            # Simulated LLM call; replace with your production code as needed.
+            time.sleep(1)
+            plan = f"Simulated plan for '{self.state['user_input']}'"
+            self.state["plan"] = plan.strip()
+            self.log("Plan generated successfully.")
+        except Exception as e:
+            self.state["error"] = f"Plan generation error: {e}"
+            self.log(self.state["error"])
+        return self
 
-def plan_generation(state):
-    """
-    Uses the tested prompt from workflow_beta.py to generate an animation plan.
-    """
-    logger.info("Starting plan generation.")
-    # Use the tested prompt from workflow_beta.py
-    prompt = f"Generate a detailed animation plan for explaining: {state['user_input']}"
-    plan = generate_plan_with_llm(prompt)
-    state["plan"] = plan.strip()
-    state.setdefault("logs", []).append("Plan generated successfully.")
-    state["current_stage"] = "plan_generation"
-    return log_state_transition("plan_generation", state, state)
-
-def code_generation(state):
-    """
-    Uses the tested code generation logic from workflow_beta.py.
-    It builds a prompt based on the generated plan and expects complete Manim code.
-    """
-    logger.info("Starting code generation.")
-    if "plan" not in state:
-        state["error"] = "No plan available for code generation."
-        return state
-    prompt = f"Based on the plan: {state['plan']}, generate complete Manim code that implements the animation."
-    generated_code = generate_code_with_llm(prompt)
-    state["generated_code"] = generated_code
-    state.setdefault("logs", []).append("Code generated successfully.")
-    state["current_stage"] = "code_generation"
-    return log_state_transition("code_generation", state, state)
-
-def execute_code(state):
-    """
-    Writes the generated Manim code to a file, calls Manim (using subprocess) 
-    to render the animation, and captures stdout/stderr.
-    """
-    logger.info("Starting code execution.")
-    # Use the system temporary directory for generated code.
-    temp_dir = tempfile.gettempdir()
-    scene_file = os.path.join(temp_dir, f"generated_{uuid.uuid4().hex}.py")
-    logger.info(f"Writing generated code to temporary file: {scene_file}")
-    try:
-        with open(scene_file, "w") as f:
-            f.write(state["generated_code"])
-        state.setdefault("logs", []).append(f"Generated code saved to {scene_file}.")
-    except Exception as e:
-        err = f"Failed to write code file: {str(e)}"
-        logger.error(err)
-        state["error"] = err
-        state["current_stage"] = "execute_code"
-        return log_state_transition("execute_code", state, state)
-    
-    # Execute the generated code using Manim.
-    try:
-        result = subprocess.run(
-            ["manim", MANIM_QUALITY, scene_file],
-            capture_output=True,
-            text=True,
-            timeout=EXECUTION_TIMEOUT,
-            cwd=os.getcwd()
-        )
-        if result.returncode != 0:
-            error_msg = (
-                f"Manim execution failed.\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+    def code_generation(self):
+        """Generate complete Manim code based on the plan (simulated)."""
+        if not self.state["plan"]:
+            self.state["error"] = "Plan not available for code generation."
+            self.log(self.state["error"])
+            return self
+        prompt = f"Generate Manim code for the plan: {self.state['plan']}"
+        self.log(f"Code generation started with prompt: {prompt}")
+        try:
+            time.sleep(1)
+            code = (
+                "from manim import *\n\n"
+                "class GeneratedScene(Scene):\n"
+                "    def construct(self):\n"
+                f"        self.add(Text('Animation for: {self.state['user_input']}'))\n"
             )
-            logger.error(error_msg)
-            state["error"] = error_msg
-            state.setdefault("logs", []).append("Execution failed.")
-            state["current_stage"] = "execute_code"
-            return log_state_transition("execute_code", state, state)
+            self.state["generated_code"] = code
+            self.log("Code generated successfully.")
+        except Exception as e:
+            self.state["error"] = f"Code generation error: {e}"
+            self.log(self.state["error"])
+        return self
+
+    def execute_code(self):
+        """Execute the generated code by writing it to a temporary file and invoking Manim."""
+        if not self.state.get("generated_code"):
+            self.state["error"] = "No generated code to execute."
+            self.log(self.state["error"])
+            return self
+
+        self.log("Executing generated code.")
+        temp_dir = tempfile.gettempdir()
+        scene_file = os.path.join(temp_dir, f"generated_{uuid.uuid4().hex}.py")
+        try:
+            with open(scene_file, "w") as f:
+                f.write(self.state["generated_code"])
+            self.log(f"Generated code written to file: {scene_file}")
+        except Exception as e:
+            self.state["error"] = f"Failed to write generated code: {e}"
+            self.log(self.state["error"])
+            return self
+
+        try:
+            result = subprocess.run(
+                ["manim", MANIM_QUALITY, scene_file],
+                capture_output=True,
+                text=True,
+                timeout=EXECUTION_TIMEOUT,
+                cwd=os.getcwd()
+            )
+            if result.returncode != 0:
+                self.state["error"] = (
+                    f"Manim execution failed. STDOUT: {result.stdout}, STDERR: {result.stderr}"
+                )
+                self.log(self.state["error"])
+            else:
+                self.state["execution_result"] = {
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "scene_file": scene_file,
+                    "returncode": result.returncode,
+                }
+                self.log("Manim execution completed successfully.")
+        except Exception as e:
+            self.state["error"] = f"Exception during code execution: {e}"
+            self.log(self.state["error"])
+        return self
+
+    def voiceover_integration(self):
+        """Integrate voiceover logic (simulated)."""
+        # Only run voiceover integration if there was no error during previous stages.
+        if self.state.get("error"):
+            self.log("Skipping voiceover integration due to previous error.")
+            return self
+        self.log("Integrating voiceover.")
+        try:
+            time.sleep(1)
+            # Simulate voiceover file generation/integration.
+            voiceover_file = "simulated_voiceover.mp3"
+            self.state["voiceover"] = voiceover_file
+            self.log("Voiceover integrated successfully.")
+        except Exception as e:
+            self.state["error"] = f"Voiceover integration failed: {e}"
+            self.log(self.state["error"])
+        return self
+
+    def error_correction(self):
+        """Attempt dummy error correction if an error is present (simulated correction)."""
+        if self.state.get("error"):
+            self.log("Attempting error correction.")
+            try:
+                time.sleep(1)
+                # Simulate an error correction; in production, plug in your logic here.
+                self.state["error_corrected"] = True
+                self.log("Error correction applied.")
+                # For simulation, assume correction clears the error.
+                self.state["error"] = None
+            except Exception as e:
+                self.state["error"] = f"Error correction exception: {e}"
+                self.log(self.state["error"])
+        return self
+
+    def run(self):
+        """
+        Execute the complete workflow:
+          - Generate plan
+          - Generate code based on the plan
+          - Execute code using Manim
+          - If errors occur, attempt error correction
+          - Otherwise, integrate voiceover
+        """
+        self.plan_generation().code_generation().execute_code()
+        if self.state.get("error"):
+            self.error_correction()
         else:
-            logger.info("Manim execution completed successfully.")
-            state["execution_result"] = {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode,
-                "scene_file": scene_file,
-            }
-            state.setdefault("logs", []).append("Execution completed successfully.")
-            state["current_stage"] = "execute_code"
-            return log_state_transition("execute_code", state, state)
-    except Exception as ex:
-        error_msg = f"Exception during execution: {str(ex)}"
-        logger.error(error_msg)
-        state["error"] = error_msg
-        state.setdefault("logs", []).append("Exception encountered during code execution.")
-        state["current_stage"] = "execute_code"
-        return log_state_transition("execute_code", state, state)
+            self.voiceover_integration()
 
-def error_correction(state):
-    """
-    Dummy error correction step. In a production system, this might trigger retries,
-    parameter adjustments, or delegate to a separate error-handling service.
-    """
-    if state.get("error"):
-        logger.info("Attempting error correction.")
-        time.sleep(1)  # Simulate error handling
-        state["error_corrected"] = True
-        state.setdefault("logs", []).append("Dummy error correction applied.")
-        state["current_stage"] = "error_correction"
-        return log_state_transition("error_correction", state, state)
-    return state
+        # Update final status and compute duration
+        self.state["status"] = "completed" if not self.state.get("error") else "failed"
+        self.state["completion_time"] = time.time()
+        self.state["duration"] = self.state["completion_time"] - self.state.get("start_time", self.state["completion_time"])
+        self.log("Workflow execution completed.")
+        self.persist_logs()
+        return self.state
 
-def complete_workflow(state):
-    """
-    Orchestrates the full workflow, sequentially calling:
-      1. plan_generation
-      2. code_generation
-      3. execute_code
-      4. (optionally) error_correction if errors occurred.
-      
-    Records all transitions, and finally records the duration and overall status.
-    """
-    state = plan_generation(state)
-    state = code_generation(state)
-    state = execute_code(state)
-    if state.get("error"):
-        state = error_correction(state)
-    state["status"] = "completed" if not state.get("error") else "failed"
-    state["completion_time"] = time.time()
-    state.setdefault("logs", []).append("Workflow completed.")
-    state["duration"] = state["completion_time"] - state.get("start_time", state["completion_time"])
-    return log_state_transition("workflow_complete", state, state)
+    def persist_logs(self):
+        """Persist workflow logs to a local file (can later be replaced with a persistent bucket)."""
+        logs_dir = "logs"
+        if not os.path.exists(logs_dir):
+            os.makedirs(logs_dir)
+        log_file = os.path.join(logs_dir, f"workflow_{uuid.uuid4().hex}.json")
+        try:
+            with open(log_file, "w") as f:
+                json.dump(self.state, f, indent=4)
+            self.log(f"Persisted workflow logs to {log_file}")
+        except Exception as e:
+            self.log(f"Unable to persist logs: {e}")
 
-def run_full_workflow(user_input):
+
+def run_full_workflow(user_input: str) -> dict:
     """
     Main entry point to run the complete workflow.
-    Initializes the state with the user input and timing, then runs the workflow.
-    
-    Returns a detailed state dictionary including logs, metrics, errors, and results,
-    which can later be analyzed to drive product improvements.
+    This function instantiates a WorkflowRunner with a given user input,
+    executes the workflow, and returns the final state.
     """
-    state = {
-        "user_input": user_input,
-        "start_time": time.time(),
-        "logs": []
-    }
-    final_state = complete_workflow(state)
+    runner = WorkflowRunner(user_input)
+    final_state = runner.run()
     logger.info(f"Final workflow state: {final_state}")
     return final_state

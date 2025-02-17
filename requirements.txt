@@ -16,3 +16,4 @@ pytest
 
 ipython
 cachetools
+pytest-asyncio

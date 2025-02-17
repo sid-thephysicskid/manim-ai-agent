@@ -1,1 +1,1 @@
- 
+# Create empty __init__.py files in each test directory 

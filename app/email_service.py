@@ -3,7 +3,8 @@ import logging
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("email_service")
+logger.setLevel(logging.INFO)
 
 def send_email_notification(to_email: str, subject: str, content: str):
     sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
@@ -29,4 +30,18 @@ def send_email_notification(to_email: str, subject: str, content: str):
     except Exception as e:
         logger.error(f"Error sending email: {e}")
         # Instead of raising the exception, simply return None
-        return None 
+        return None
+
+def send_email(recipient: str, subject: str, body: str) -> None:
+    """
+    Stub function to send email notifications.
+    
+    TODO: Replace this stub with actual SendGrid integration.
+    This function should be harmless if SendGrid is not configured.
+    """
+    try:
+        # For now, just log the email sending attempt.
+        logger.info(f"Sending email to {recipient}: Subject: {subject} - Body: {body}")
+        # TODO: Integrate SendGrid email sending.
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}") 
