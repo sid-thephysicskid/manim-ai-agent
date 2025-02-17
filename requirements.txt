@@ -1,0 +1,18 @@
+# Core dependencies
+fastapi
+pydantic
+pydantic-settings
+pydantic[email]
+openai
+manim==0.19.0
+manim-voiceover[transcribe]
+manim-voiceover[elevenlabs]
+langgraph
+python-dotenv
+uvicorn
+sendgrid
+# Test dependencies
+pytest
+
+ipython
+cachetools

@@ -1,0 +1,23 @@
+notes.md
+
+# python
+__pycache__
+.pytest_cache/
+*.pyc
+venv/
+.env
+
+# mac
+.DS_Store
+
+generated/
+media/
+*.mp4
+
+manimce-docs.txt
+questions.md
+manim/
+rag_strategy_deepresearch.md
+tmp/
+tmp_media/
+cache/
