@@ -283,15 +283,9 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
     logger = setup_question_logger(state["user_input"])
     logger.info("Executing Manim code")
     
-    # Generate file name in the generated folder with a standard timestamp
+    # Generate file name in the generated folder
     scene_file = generate_scene_filename(state['user_input'])
     logger.info(f"Writing code to file: {scene_file}")
-    
-    base_name, ext = os.path.splitext(scene_file)
-    counter = 1
-    while os.path.exists(scene_file):
-        scene_file = f"{base_name}_{counter}{ext}"
-        counter += 1
     
     with open(scene_file, 'w') as f:
         f.write(state['generated_code'])
@@ -300,7 +294,7 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         logger.info(f"Running Manim with quality setting: {MANIM_QUALITY}")
         result = subprocess.run(
-            ["manim", MANIM_QUALITY, scene_file],
+            ["manim", MANIM_QUALITY, scene_file, "--media_dir", "/app/media"],
             capture_output=True,
             text=True,
             timeout=EXECUTION_TIMEOUT,
@@ -313,14 +307,23 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
             output_state = {**state, "error": error_msg, "current_stage": "execute"}
             return log_state_transition("execute_code", state, output_state)
         
+        # Find the generated video file
+        video_file = None
+        for file in os.listdir("/app/media/videos"):
+            if file.endswith(".mp4"):
+                video_file = f"/app/media/videos/{file}"
+                break
+        
         logger.info("Manim execution completed successfully.")
         output = {
             "stdout": result.stdout,
             "stderr": result.stderr,
             "returncode": result.returncode,
-            "scene_file": scene_file
+            "scene_file": scene_file,
+            "video_file": video_file
         }
         logger.info(f"Scene file preserved at: {scene_file}")
+        logger.info(f"Video file generated at: {video_file}")
         output_state = {**state, "execution_result": output, "error": None, "current_stage": "execute"}
         return log_state_transition("execute_code", state, output_state)
     except Exception as e:

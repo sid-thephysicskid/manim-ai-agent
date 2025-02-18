@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
-class JobStatus(Enum):
+class JobStatus(str, Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -16,7 +16,7 @@ class Job(BaseModel):
     """Job model for storing workflow state and metadata."""
     job_id: str
     question: str
-    status: JobStatus = Field(default=JobStatus.QUEUED)
+    status: JobStatus = JobStatus.QUEUED
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     current_stage: str = Field(default="plan")

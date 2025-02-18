@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from threading import Lock
 import uuid
 from datetime import datetime
@@ -11,12 +11,15 @@ class JobStore:
         self._lock = Lock()
     
     def create_job(self, question: str) -> Job:
-        """Create a new job and return its ID."""
+        """Create a new job."""
         job_id = str(uuid.uuid4())
         job = Job(
             job_id=job_id,
-            question=question
-        )  # All other fields will use defaults
+            question=question,
+            status=JobStatus.QUEUED,  # Use enum here
+            created_at=datetime.utcnow(),
+            logs=[]
+        )
         with self._lock:
             self._jobs[job_id] = job
         return job
@@ -25,24 +28,23 @@ class JobStore:
         """Get job by ID."""
         return self._jobs.get(job_id)
     
-    def update_job(self, job_id: str, **kwargs) -> Optional[Job]:
-        """Update job fields."""
+    def update_job(self, job_id: str, status: str = None, result_url: str = None, error: str = None) -> None:
+        """Update job status."""
         with self._lock:
             if job := self._jobs.get(job_id):
-                # Update only valid fields
-                for key, value in kwargs.items():
-                    if hasattr(job, key):
-                        setattr(job, key, value)
+                if status:
+                    job.status = JobStatus[status.upper()]  # Convert string to enum
+                if result_url:
+                    job.result_url = result_url
+                if error:
+                    job.error = error
                 job.updated_at = datetime.utcnow()
-                return job
-            return None
     
     def add_log(self, job_id: str, message: str) -> None:
         """Add a log message to the job."""
         with self._lock:
             if job := self._jobs.get(job_id):
-                job.logs.append(f"[{datetime.utcnow().isoformat()}] {message}")
-                job.updated_at = datetime.utcnow()
+                job.logs.append(message)
 
 # Global job store instance and lock
 job_store = JobStore()

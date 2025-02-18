@@ -69,7 +69,7 @@ ERROR_CACHE = TTLCache(maxsize=100, ttl=3600)  # 1 hour cache
 VALID_COLORS = ["blue", "teal", "green", "yellow", "gold", "red", "maroon", "purple", "pink", "light_pink", "orange", "light_brown", "dark_brown", "gray_brown", "white", "black", "lighter_gray", "light_gray", "gray", "dark_gray", "darker_gray", "blue_a", "blue_b", "blue_c", "blue_d", "blue_e", "pure_blue"]
 
 # Set up the directory for all generated files (both scripts and logs)
-GENERATED_DIR = os.path.join(os.getcwd(), "generated")
+GENERATED_DIR = os.path.join(os.path.dirname(__file__), "app", "generated")
 os.makedirs(GENERATED_DIR, exist_ok=True)
 
 # Establish a run-level timestamp (used both for file names and log file)
@@ -371,10 +371,9 @@ def generate_code(state: GraphState, **kwargs) -> GraphState:
     try:
         # Code template with embedded references and placeholders
         code_template = '''from manim import *
-from manim_voiceover import VoiceoverScene
-from manim_voiceover.services.openai import OpenAIService
+from app.templates.base.scene_base import ManimVoiceoverBase
 
-class {ClassName}(VoiceoverScene):
+class {ClassName}(ManimVoiceoverBase):
     """
     Note: For camera movements, use:
     - self.play(Group().animate.scale(1.2)) for scaling objects
@@ -382,76 +381,39 @@ class {ClassName}(VoiceoverScene):
     Do not use camera.frame unless inheriting from MovingCameraScene
     """
     
-    def __init__(self):
-        super().__init__()
-        self.set_speech_service(OpenAIService(voice="nova", model="tts-1-hd"))
-    
-    # HELPER METHODS (type hinted)
-    def create_title(self, text: str) -> VGroup:
-        """Auto-detects math notation and returns a title placed at the top edge."""
-        if any(c in text for c in {'\\\\', '$', '_', '^'}):
-            return MathTex(text, font_size=42).to_edge(UP)
-        return Text(text, font_size=42).to_edge(UP)
-        
-    def ensure_group_visible(self, group: VGroup, margin: float = 0.5):
-        """
-        Ensures the entire group is visible within the camera frame.
-        This function scales the group down if it exceeds the available width or height,
-        then repositions it so that its bounding box fully resides inside the camera frame.
-        """
-        group_width = group.width
-        group_height = group.height
-        available_width = self.camera.frame_width - 2 * margin
-        available_height = self.camera.frame_height - 2 * margin
-        width_scale = available_width / group_width if group_width > available_width else 1
-        height_scale = available_height / group_height if group_height > available_height else 1
-        scale_factor = min(width_scale, height_scale)
-        if scale_factor < 1:
-            group.scale(scale_factor)
-
-        left_boundary = -self.camera.frame_width / 2 + margin
-        right_boundary = self.camera.frame_width / 2 - margin
-        bottom_boundary = -self.camera.frame_height / 2 + margin
-        top_boundary = self.camera.frame_height / 2 - margin
-        group_left = group.get_left()[0]
-        group_right = group.get_right()[0]
-        group_bottom = group.get_bottom()[1]
-        group_top = group.get_top()[1]
-
-        shift_x = 0
-        if group_left < left_boundary:
-            shift_x = left_boundary - group_left
-        elif group_right > right_boundary:
-            shift_x = right_boundary - group_right
-
-        shift_y = 0
-        if group_bottom < bottom_boundary:
-            shift_y = bottom_boundary - group_bottom
-        elif group_top > top_boundary:
-            shift_y = top_boundary - group_top
-
-        group.shift(RIGHT * shift_x + UP * shift_y)
-    
     def construct(self):
         """Scene execution order"""
+        # Call each scene in order:
         {scene_calls}
     
-    # SCENES (each scene must end with self.clear() or include FadeOut)
+    # SCENES (each scene must end with self.play(*[FadeOut(mob)for mob in self.mobjects if mob != self.background]))
     {scene_methods}
 '''
         # Safely read the example file "gcf.py" if present.
         try:
-            with open("gcf.py", "r") as f:
+            with open("app/templates/examples/gcf.py", "r") as f:
                 gcf_example = f.read()
         except FileNotFoundError:
             logger.warning("gcf.py not found, using default template")
-            gcf_example = "DEFAULT_GCF_TEMPLATE"
+            gcf_example = ""
             
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{
                 "role": "user",
-                "content": f"""Generate Manim code with voiceovers using this structure:
+                "content": f"""Create a Manim scene that inherits from ManimVoiceoverBase. This base class provides:
+    
+    1. Background image setup
+    2. Voice service configuration
+    3. Helper methods:
+       - create_title(text): Creates properly sized titles, handles math notation
+       - ensure_group_visible(group, margin): Ensures VGroups fit in frame
+    
+    The scene should use these methods appropriately. For example:
+    - Use create_title() for section headings
+    - Use ensure_group_visible() to ensure all objects are visible in the frame
+    - Background and voice are auto-configured in __init__
+    Generate Manim code with voiceovers using this structure:
 {gcf_example}
 Convert this plan to Manim code following STRICT RULES:
 {state['plan']}
@@ -462,30 +424,28 @@ RULES ENFORCED BY SYSTEM (MUST OBEY):
    - Format: r"\\frac{{1}}{{2}}" not r"$\\frac{{1}}{{2}}$".
    - Never use Text/Tex for math content.
 2. SCENE STRUCTURE:
-   - Every scene method must end with self.clear() or include FadeOut.
-   - Suffix scene methods with _scene.
+   - Every scene method must end with: self.play(*[FadeOut(mob)for mob in self.mobjects if mob != self.background])
    - The construct() method must call the scene methods in order.
 3. GENERATE CODE STRUCTURE:
    - Class name should reflect the topic.
    - Include between 3 and 5 scene methods.
    - Helper methods and all functions must include type hints.
-4. PARAMETER VALIDATION:
-   - Helper methods must be properly type-hinted.
-   - Return type hints are required for all methods.
-   - Validate and adjust mobject positions with ensure_group_visible().
-5. VALIDATE AGAINST:
+   - Use Create() to create objects, not ShowCreation().
+
+4. VALIDATE AGAINST:
    ❌ Text with math symbols.
    ❌ Color type annotations (use string color names).
-   ❌ Missing scene cleanup.
-6. LAYOUT & ALIGNMENT RULES:
+   ❌ Missing scene fadeout.
+5. LAYOUT & ALIGNMENT RULES:
    - Use Manim's built-in alignment utilities (e.g., align_to, next_to, VGroup().arrange(DOWN, buff=0.5)) to avoid overlapping visuals.
    - Ensure all objects are clearly visible and appropriately spaced.
    - For layering, explicitly set foreground elements using self.add_foreground_mobjects() where needed.
    - Apply structured arrangement for clear and well-organized scenes.
-7. VISUAL CONTENT RULES:
+   - Validate and adjust mobject positions with ensure_group_visible().
+6. VISUAL CONTENT RULES:
    - Do not import any assets like SVGs or images.
    - Incorporate as many valid, constructive visual elements as possible to teach the concept.
-   - Use visual objects from the Manim API (e.g., Polygon, RegularPolygon, Star, Rectangle, Square, RoundedRectangle) as defined in {api_context}.
+   - Use visual objects from the Manim API as defined in {api_context}.
    - Ensure that visuals are relevant, well-aligned, and enhance explanation. For example, include diagrams, charts, or geometric shapes that illustrate the topic.
    - If the lesson concept can benefit from a visualization, include at least one visual element to reinforce the narrative.
    - Validate that objects are constructed with valid parameters according to the latest Manim API (e.g., when creating a Square, ensure its parameters match those in Manim Community v0.19.0).
@@ -544,10 +504,10 @@ def validate_code(state: GraphState) -> GraphState:
         # 2. Basic structural checks
         structural_checks = [
             (r'from manim import', "Missing Manim imports"),
-            (r'class \w+\(.*Scene\)', "Missing scene class definition"),
+            (r'from app.templates.base.scene_base import ManimVoiceoverBase', "Missing ManimVoiceoverBase imports"),
+            # (r'class \w+\(.*Scene\)', "Missing scene class definition"),
             (r'def construct\(self\)', "Missing construct method"),
-            (r'with self\.voiceover', "Missing voiceover context"),
-            (r'self\.clear\(\)|FadeOut\(', "Missing scene cleanup")
+            # (r'self\.play\(*[FadeOut\(mob\)for mob in self\.mobjects if mob != self\.background]\)', "Missing scene fadeout")
         ]
         
         for pattern, message in structural_checks:
@@ -568,7 +528,7 @@ def validate_code(state: GraphState) -> GraphState:
     except SyntaxError as e:
         return {**state, "error": f"Syntax error: {str(e)}", "current_stage": "validate"}
     
-@traceable( name="execute_code")
+@traceable(name="execute_code")
 def execute_code(state: GraphState) -> GraphState:
     """Execute Manim code and capture the output."""
     logger.info("Executing Manim code")
@@ -583,6 +543,9 @@ def execute_code(state: GraphState) -> GraphState:
         scene_file = f"{base_name}_{counter}{ext}"
         counter += 1
     
+    # Convert to absolute path
+    scene_file = os.path.abspath(scene_file)
+    
     with open(scene_file, 'w') as f:
         f.write(state['generated_code'])
     logger.info(f"Saved generated code to: {scene_file}")
@@ -590,11 +553,12 @@ def execute_code(state: GraphState) -> GraphState:
     try:
         logger.info(f"Running Manim with quality setting: {MANIM_QUALITY}")
         result = subprocess.run(
-            ["manim", MANIM_QUALITY, scene_file],
+            [sys.executable, "-m", "manim", MANIM_QUALITY, scene_file],
             capture_output=True,
             text=True,
             timeout=EXECUTION_TIMEOUT,
-            cwd=os.getcwd()
+            cwd=os.getcwd(),
+            env={**os.environ, "PYTHONPATH": f"{os.getcwd()}:{os.environ.get('PYTHONPATH', '')}"}
         )
         
         if result.returncode != 0:
@@ -810,7 +774,7 @@ workflow.add_conditional_edges(
 
 workflow.add_conditional_edges(
     "correct_code",
-    lambda state: "validate_code" if state["correction_attempts"] < 3 else END,
+    lambda x: "validate_code" if x["correction_attempts"] < 3 else END,
     {
         "validate_code": "validate_code",
         END: END
@@ -819,7 +783,7 @@ workflow.add_conditional_edges(
 
 workflow.add_conditional_edges(
     "execute_code",
-    lambda state: "correct_code" if (state.get("error") and state["correction_attempts"] < 3) else END,
+    lambda x: "correct_code" if (x.get("error") and x["correction_attempts"] < 3) else END,
     {
         "correct_code": "correct_code",
         END: END
@@ -867,7 +831,7 @@ def load_error_history() -> list:
 def get_manim_api_context() -> str:
     """Load the up-to-date Manim API source from a dedicated file."""
     try:
-        with open("manim_api_doc_mobjects.py", "r") as f:
+        with open("app/templates/api_docs/manim_mobjects.py", "r") as f:
             return f.read()
     except Exception as e:
         logger.error(f"Failed to load Manim API context: {e}")
@@ -1197,7 +1161,7 @@ if __name__ == "__main__":
             logger.info("Continuing with execution...")
         
         # Example questions
-        questions = ["How to plot a function?",
+        questions = ["How do magnets work?",
                     #  "What causes the seasons?",
                     #  "Why is the sky blue?",
                     #  "How do earthquakes happen?",

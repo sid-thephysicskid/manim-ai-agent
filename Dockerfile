@@ -12,11 +12,11 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create and set permissions for media and generated directories
+RUN mkdir -p /app/media /app/generated && chmod -R 777 /app/media /app/generated
+
 # Copy the entire codebase into the container
 COPY . /app/
-
-# Ensure the media directory is writable
-RUN mkdir -p /app/media && chmod -R 777 /app/media
 
 # Expose port 8000 for the FastAPI application
 EXPOSE 8000

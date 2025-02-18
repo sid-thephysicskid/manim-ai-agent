@@ -13,7 +13,9 @@ uvicorn
 sendgrid
 # Test dependencies
 pytest
+pytest-asyncio
+pytest-cov
+rich
 
 ipython
 cachetools
-pytest-asyncio

@@ -1,11 +1,51 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+import logging
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app.workflow.runner import WorkflowRunner
 from app.models.state import GraphState
 from app.job_store import job_store, Job
 from app.models.job import JobStatus
+import traceback
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Log to console
+        logging.FileHandler('app.log')  # Log to file
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Add error handling middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        logger.error(f"Request failed: {str(e)}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e), "traceback": str(traceback.format_exc())}
+        )
+
+# Add exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global exception handler caught: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc),
+            "traceback": str(traceback.format_exc())
+        }
+    )
 
 class GenerateRequest(BaseModel):
     """Request model for video generation."""
@@ -27,15 +67,26 @@ async def health_check():
     return {"status": "healthy"}
 
 @app.get("/api/status/{job_id}")
-async def get_status(job_id: str):
-    """Get job status."""
-    if job := job_store.get_job(job_id):
+async def get_job_status(job_id: str):
+    try:
+        job = job_store.get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+        
         return {
-            "status": job.status.value,  # Convert enum to string
-            "result_url": job.result_url,
-            "error": job.error
+            "job_id": job_id,
+            "status": job.status.value,
+            "logs": job.logs,
+            "message": "Job completed successfully." if job.status == JobStatus.COMPLETED else "Job in progress.",
+            "result": job.result_url if job.status == JobStatus.COMPLETED else None,
+            "error": job.error if job.error else None
         }
-    raise HTTPException(status_code=404, detail="Job not found")
+    except Exception as e:
+        logger.error(f"Error getting job status: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail={"error": str(e), "traceback": traceback.format_exc()}
+        )
 
 @app.post("/api/generate", status_code=202)
 async def generate_video(request: GenerateRequest, background_tasks: BackgroundTasks):

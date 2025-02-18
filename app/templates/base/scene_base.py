@@ -1,6 +1,6 @@
 from manim import *
 from manim_voiceover import VoiceoverScene
-from manim_voiceover.services.elevenlabs import ElevenLabsService
+from manim_voiceover.services.openai import OpenAIService
 from pathlib import Path
 
 class ManimVoiceoverBase(VoiceoverScene):
@@ -15,16 +15,9 @@ class ManimVoiceoverBase(VoiceoverScene):
         
         # Setup voice service
         self.set_speech_service(
-            ElevenLabsService(
-                voice_name="Russell",
-                voice_id="U0neD5Gd97pQtdeDfaZu",
-                model="eleven_multilingual_v2",
-                voice_settings={
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                    "style": 0,
-                    "use_speaker_boost": True
-                }
+            OpenAIService(
+                voice="onyx",
+                model="tts-1-hd"
             )
         )
 
