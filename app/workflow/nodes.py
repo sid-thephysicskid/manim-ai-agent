@@ -78,15 +78,43 @@ def plan_scenes(state: Dict[str, Any]) -> Dict[str, Any]:
         output_state = {**state, "error": error_msg, "current_stage": "plan"}
         return log_state_transition("plan_scenes", state, output_state)
 
-@traceable(name="generate_code")
-def generate_code(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate Manim code based on the plan."""
-    prompt = f"""
-    Create a Manim scene that inherits from ManimVoiceoverBase. This base class provides:
+def _get_voiceover_template() -> str:
+    """Get the template for proper voiceover structure."""
+    return '''
+        with self.voiceover(text=(
+            "{text}"
+        )) as tracker:
+            {animation_code}
+            # Optional: Adjust animation timing to match voiceover
+            # run_time=tracker.duration
+'''
+
+def _get_code_generation_prompt(state: Dict[str, Any], api_context: str) -> str:
+    """Generate the base prompt for code generation."""
+    voiceover_example = _get_voiceover_template().format(
+        text="This is an example voiceover text",
+        animation_code="self.play(Write(text), run_time=tracker.duration)"
+    )
     
-    1. Background image setup
-    2. Voice service configuration
-    3. Helper methods:
+    return f"""
+    Generate Manim code to explain {state['user_input']} by following the plan and the rules below.
+    Plan: {state['plan']}
+    Generate complete, working code that implements this plan.
+    VOICEOVER RULES (MUST FOLLOW EXACTLY):
+    1. Every animation must be wrapped in a voiceover block using this exact pattern:
+        with self.voiceover(text="Your narration here") as tracker:
+            self.play(Your_Animation_Here, run_time=tracker.duration)
+    
+    2. Never use self.voiceover() directly without a 'with' statement 
+    3. Use tracker.duration to sync animation timing
+    4. Split long narrations into multiple voiceover blocks   
+    5. Each animation sequence should have its own voiceover block with appropriate narration
+    
+    BASE CLASS RULES (MUST INHERIT FROM THIS CLASS):
+    Make sure to inherit from ManimVoiceoverBase. This base class provides:
+    
+    1. Background image setup and Voice service configuration
+    2. Helper methods:
        - create_title(text): Creates properly sized titles, handles math notation
        - ensure_group_visible(group, margin): Ensures VGroups fit in frame
     
@@ -94,18 +122,58 @@ def generate_code(state: Dict[str, Any]) -> Dict[str, Any]:
     - Use create_title() for section headings
     - Use ensure_group_visible() for complex arrangements
     - Background and voice are auto-configured in __init__
-    
-    Original plan: {state['plan']}
-    
-    Generate complete, working code that implements this plan.
     """
+
+def _get_example_code(code_template: str) -> str:
+    """Get example code from gcf.py or fallback to template."""
+    try:
+        with open("gcf.py", "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return code_template
+def _sanitize_generated_code(code: str) -> str:
+    """Minimal sanitization for non-semantic issues."""
+    # Only handle truly safe transformations like whitespace and comments
+    return '\n'.join([line for line in code.split('\n') if not line.strip().startswith('!')])
+
+# def _sanitize_generated_code(code: str) -> str:
+#     """Clean and validate the generated code."""
+#     # Remove lines starting with '!'
+#     code = '\n'.join([line for line in code.split('\n') if not line.strip().startswith('!')])
     
+#     # Fix color syntax
+#     code = re.sub(r'\.set_color\(([A-Z]+)\)',
+#                   lambda m: f'.set_color("{m.group(1).lower()}")', code)
+    
+#     # Add return type hints
+#     code = re.sub(
+#         r'(def (?!__init__|construct)(\w+)\(self(?!, color: str)\))(\s*:)',
+#         r'\1 -> None\3',
+#         code
+#     )
+    
+#     # Fix direct voiceover calls
+#     code = re.sub(
+#         r'self\.voiceover\((.*?)\)\s*\n\s*self\.play\((.*?)\)',
+#         lambda m: f'with self.voiceover({m.group(1)}) as tracker:\n            self.play({m.group(2)}, run_time=tracker.duration)',
+#         code,
+#         flags=re.DOTALL
+#     )
+    
+#     return code
+
+@traceable(name="generate_code")
+def generate_code(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Generate Manim code based on the plan."""
     logger = setup_question_logger(state["user_input"])
     logger.info("Generating Manim code from plan")
     api_context = get_manim_api_context()
     
     try:
-        # Code template with embedded references and placeholders
+        # Get base prompt
+        prompt = _get_code_generation_prompt(state, api_context)
+        
+        # Get code template and example
         code_template = '''from manim import *
 from app.templates.base.scene_base import ManimVoiceoverBase
 
@@ -126,25 +194,19 @@ class {ClassName}(ManimVoiceoverBase):
         ))
     {scene_methods}
 '''
-        # Safely read the example file "gcf.py" if present
-        try:
-            with open("gcf.py", "r") as f:
-                gcf_example = f.read()
-        except FileNotFoundError:
-            logger.warning("gcf.py not found, using default template")
-            gcf_example = "DEFAULT_GCF_TEMPLATE"
-            
+        gcf_example = _get_example_code(code_template)
+        
+        # Generate code using OpenAI
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{
                 "role": "user",
-                "content": f"""Generate Manim code with voiceovers using this structure:
+                "content": f"""{prompt}
+                Use the following example as a guide:
 {gcf_example}
-Convert this plan to Manim code following STRICT RULES:
-{state['plan']}
-IMPORTANT: Only use the following colors (and their aliases) exactly as defined: {', '.join(VALID_COLORS)}. Do not invent or use any other color names.
+IMPORTANT: Only use the following colors exactly as defined: {', '.join(VALID_COLORS)}. Do not invent or use any other color names.
 
-RULES ENFORCED BY SYSTEM (MUST OBEY):
+RULES ENFORCED(MUST OBEY):
 1. MATH RULES:
    - Use MathTex for mathematical content: fractions, Greek letters, operators, sub/superscripts.
    - Format: r"\\frac{{1}}{{2}}" not r"$\\frac{{1}}{{2}}$".
@@ -185,24 +247,14 @@ OUTPUT FORMAT:
             }]
         )
         
-        code = response.choices[0].message.content
-        # Remove any extraneous lines starting with '!'
-        code = '\n'.join([line for line in code.split('\n') if not line.strip().startswith('!')])
-        
-        # Minimal essential validation regex adjustments
-        code = re.sub(r'\.set_color\(([A-Z]+)\)',
-                      lambda m: f'.set_color("{m.group(1).lower()}")', code)
-        code = re.sub(
-            r'(def (?!__init__|construct)(\w+)\(self(?!, color: str)\))(\s*:)',
-            r'\1 -> None\3',
-            code
-        )
+        # Process the generated code
+        code = _sanitize_generated_code(response.choices[0].message.content)
         
         output_state = {
             **state, 
             "generated_code": code,
             "current_stage": "code",
-            "correction_attempts": 0  # Reset the correction counter
+            "correction_attempts": 0
         }
         return log_state_transition("generate_code", state, output_state)
     
@@ -250,21 +302,15 @@ def validate_code(state: Dict[str, Any]) -> Dict[str, Any]:
         if not has_valid_base:
             return {**state, "error": "Scene must inherit from VoiceoverScene or ManimVoiceoverBase"}
         
-        # Check for cleanup code
-        has_cleanup = False
-        cleanup_patterns = [
-            "*[FadeOut(mob)for mob in self.mobjects if mob != self.background]",
-            "self.clear()",
-            "*[FadeOut(m) for m in self.mobjects if m != self.background]"
-        ]
+        # Add voiceover pattern validation
+        if "with self.voiceover" not in state["generated_code"]:
+            return {**state, "error": "Missing required voiceover pattern: 'with self.voiceover(...) as tracker:'"}
         
-        for pattern in cleanup_patterns:
-            if pattern in state["generated_code"]:
-                has_cleanup = True
-                break
-        
-        if not has_cleanup:
-            return {**state, "error": "Scene must include proper cleanup (FadeOut all mobjects except background)"}
+        # Check for proper voiceover usage
+        scene_methods = re.findall(r'def \w+_scene.*?(?=def|\Z)', state["generated_code"], re.DOTALL)
+        for method in scene_methods:
+            if "self.voiceover" in method and "with" not in method:
+                return {**state, "error": "Incorrect voiceover usage. Must use 'with' statement pattern."}
         
         # Code passed all validations
         output_state = {
@@ -309,9 +355,11 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
         
         # Find the generated video file
         video_file = None
+        video_url = None
         for file in os.listdir("/app/media/videos"):
             if file.endswith(".mp4"):
                 video_file = f"/app/media/videos/{file}"
+                video_url = f"/api/video/{file}"  # URL for frontend
                 break
         
         logger.info("Manim execution completed successfully.")
@@ -320,7 +368,9 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
             "stderr": result.stderr,
             "returncode": result.returncode,
             "scene_file": scene_file,
-            "video_file": video_file
+            "scene_url": f"/api/code/{os.path.basename(scene_file)}",  # Code URL
+            "video_file": video_file,
+            "video_url": video_url  # Video URL
         }
         logger.info(f"Scene file preserved at: {scene_file}")
         logger.info(f"Video file generated at: {video_file}")

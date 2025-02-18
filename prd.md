@@ -18,7 +18,7 @@ This project refines and deploys an educational video generation workflow based 
 
 The goal of this phase is to refactor the existing workflow into a FastAPI-based backend that supports:
   
-- **Job Submission:** Clients submit a “question” along with metadata such as rendering quality, desired detail/duration, user knowledge level, and a preferred voice model (with the option to supply an email address for notifications).  
+- **Job Submission:** Clients submit a "question" along with metadata such as rendering quality, desired detail/duration, user knowledge level, and a preferred voice model (with the option to supply an email address for notifications).  
 - **Progress Reporting:** Clients receive real-time (via polling for alpha) progress updates until the video is rendered.
 - **Persistence:** The frontend will store finished jobs locally so that users can return later and see the final video output.
 - **Deployment:** The backend will be containerized and deployed on Railway (using their hobby plan, upgradeable later if needed) while the frontend is deployed on Vercel.
@@ -34,10 +34,10 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 2. **API Design:**  
    - Create a POST endpoint (`/api/generate`) to submit a job with the following metadata:
      - `question` (string)
-     - `rendering_quality` (default: `"medium"`)
-     - `duration_detail` (descriptor, default: `"normal"`)
-     - `user_level` (e.g., `"child"`, `"high_school"`, `"college"`)
-     - `voice_model` (selection among three choices, default: `"nova"`)
+     - `rendering_quality` (default: "medium")
+     - `duration_detail` (descriptor, default: "normal")
+     - `user_level` (e.g., "child", "high_school", "college")
+     - `voice_model` (selection among three choices, default: "nova")
      - `email` (optional email string for job notifications)
    - Create a GET polling endpoint (`/api/status/{job_id}`) to report:
      - Job status (`queued`, `processing`, `completed`, or `failed`)
@@ -45,7 +45,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
      - The final output reference (e.g., a URL/path to the rendered video)
 
 3. **Background Processing & Job Queue:**  
-   - Leverage FastAPI’s `BackgroundTasks` to process long-running jobs.
+   - Leverage FastAPI's `BackgroundTasks` to process long-running jobs.
    - Use an in-memory job store (for alpha) to keep track of job IDs, statuses, and logs.
 
 4. **Email Notification:**  
@@ -79,7 +79,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 
 - **Job Progress:**  
   - The frontend requests `/api/status/{job_id}` periodically until the status is set to `completed` or `failed`.
-  - Display a log/progress summary to build user trust, e.g., “Plan generated”, “Code generated”, “Rendering in progress”, etc.
+  - Display a log/progress summary to build user trust, e.g., "Plan generated", "Code generated", "Rendering in progress", etc.
   
 ### 3.2. API Endpoints
 
@@ -130,7 +130,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 
 - **Metadata-Driven Adjustments:**  
   - Use the metadata (especially the `voice_model`) to adjust generation prompts for the OpenAI-based code generation step.
-  - Modify the output code if required (e.g., updating the voice setting in the generated code) based on the user’s selected voice model.
+  - Modify the output code if required (e.g., updating the voice setting in the generated code) based on the user's selected voice model.
 
 ---
 
@@ -143,7 +143,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
   - Prepare for future migration to a more robust queue (e.g., Celery with Redis) if synchronous processing shows bottlenecks.
   
 - **Resource Constraints:**  
-  - The Railway Hobby plan (8 GB RAM / 8 vCPU) is the current target. Upgrade to Pro if tests show significant CPU or memory limitations.
+  - The Railway Hobby plan (8 GB RAM / 8 vCPU) is the current target. Upgrade to Pro if tests show significant CPU or memory limitations.
 
 ### 4.2. Security & Availability
 
@@ -177,7 +177,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
   - Standard libraries for logging, subprocess execution, threading, etc.
   
 - **Processing:**  
-  - Use FastAPI’s `BackgroundTasks` to offload long-running video rendering tasks.
+  - Use FastAPI's `BackgroundTasks` to offload long-running video rendering tasks.
   - Maintain an in-memory job store (dictionary mapping job IDs to status dictionaries) for the alpha release.
   
 - **Workflow Integration:**  
@@ -188,7 +188,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 - **Framework:** Vite-powered JavaScript SPA  
 - **Deployment:** Hosted on Vercel  
 - **Integration:**  
-  - The frontend sends user requests to the backend’s `/api/generate` endpoint.
+  - The frontend sends user requests to the backend's `/api/generate` endpoint.
   - It polls `/api/status/{job_id}` for progress updates.
   - Uses localStorage to persist job results so the user sees the completed video even if they close and later reopen the browser.
 
@@ -225,7 +225,7 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 
 3. **In-Memory Job Store & Background Tasks:**
    - Implement an in-memory dictionary for job storage.
-   - Use FastAPI’s `BackgroundTasks` to process each job asynchronously.
+   - Use FastAPI's `BackgroundTasks` to process each job asynchronously.
 
 4. **Integrate Email Notification:**
    - Build a module (e.g., `/app/email_service.py`) to send emails using SendGrid.
@@ -240,11 +240,11 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
    - Copy source code and run Uvicorn.
 
 2. **Deploy on Railway:**
-   - Use Railway’s container deployment with proper resource allocation (start with Hobby plan, upgrade as needed).
+   - Use Railway's container deployment with proper resource allocation (start with Hobby plan, upgrade as needed).
    - Set environment variables and test connectivity.
 
 3. **Configure CORS:**
-   - Ensure the backend’s FastAPI instance allows requests from the Vercel frontend domain.
+   - Ensure the backend's FastAPI instance allows requests from the Vercel frontend domain.
 
 ### Phase 3: Testing & Quality Assurance
 
@@ -283,6 +283,28 @@ The goal of this phase is to refactor the existing workflow into a FastAPI-based
 
 - **Scaling & Monitoring:**  
   Introduce application monitoring, better error aggregation, and logging aggregation solutions.
+
+- **Video Storage & Delivery:**
+  For production deployment, implement one of these storage solutions:
+  1. **Cloud Storage (AWS S3):**
+     - Store videos and generated code in S3 buckets
+     - Configure proper CORS and lifecycle rules
+     - Use CloudFront CDN for better delivery
+  2. **CDN Service:**
+     - Use Cloudflare R2 or Bunny.net for storage and delivery
+     - Implement proper cache control
+  3. **Video Hosting Service:**
+     - Integrate with Vimeo API or similar service
+     - Leverage their existing CDN and player infrastructure
+  4. **Railway Volume Storage:**
+     - Use Railway's persistent volumes (more expensive)
+     - Implement proper backup strategy
+   
+  Key considerations for implementation:
+  - Cost optimization for storage and bandwidth
+  - Video retention policy
+  - Access control and security
+  - Delivery performance across regions
 
 ---
 

@@ -2,8 +2,9 @@ from typing import Dict, Any
 import logging
 from app.models.state import GraphState
 from app.core.logging import setup_question_logger
-from .nodes import generate_code, plan_scenes
+from .nodes import generate_code, plan_scenes, validate_code, execute_code
 from app.job_store import job_store
+import asyncio
 
 class WorkflowRunner:
     """Handles the execution of the video generation workflow."""
@@ -22,13 +23,25 @@ class WorkflowRunner:
             
             # Plan generation
             job_store.add_log(self.job_id, "Starting scene planning")
-            self.state = plan_scenes(self.state)
+            self.state = await self.run_step(plan_scenes)
             if self.state.get("error"):
                 raise Exception(self.state["error"])
             
             # Code generation
             job_store.add_log(self.job_id, "Starting code generation")
-            self.state = generate_code(self.state)
+            self.state = await self.run_step(generate_code)
+            if self.state.get("error"):
+                raise Exception(self.state["error"])
+            
+            # Code validation
+            job_store.add_log(self.job_id, "Validating generated code")
+            self.state = await self.run_step(validate_code)
+            if self.state.get("error"):
+                raise Exception(self.state["error"])
+            
+            # Code execution
+            job_store.add_log(self.job_id, "Executing code")
+            self.state = await self.run_step(execute_code)
             if self.state.get("error"):
                 raise Exception(self.state["error"])
             
@@ -36,7 +49,7 @@ class WorkflowRunner:
             job_store.update_job(
                 self.job_id,
                 status="completed",
-                result_url=self.state.get("execution_result", {}).get("scene_file")
+                result_url=self.state.get("execution_result", {}).get("video_file")
             )
             
         except Exception as e:
@@ -49,4 +62,8 @@ class WorkflowRunner:
             job_store.add_log(self.job_id, f"Error: {str(e)}")
             self.logger.error(f"Workflow error: {str(e)}")
             self.state["error"] = str(e)
-            return self.state 
+
+    async def run_step(self, step_func):
+        """Run a workflow step in a thread to avoid blocking."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, step_func, self.state) 

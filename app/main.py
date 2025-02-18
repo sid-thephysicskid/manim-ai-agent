@@ -1,6 +1,6 @@
 import logging
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from app.workflow.runner import WorkflowRunner
@@ -8,6 +8,8 @@ from app.models.state import GraphState
 from app.job_store import job_store, Job
 from app.models.job import JobStatus
 import traceback
+from fastapi.staticfiles import StaticFiles
+import os
 
 # Set up logging
 logging.basicConfig(
@@ -21,6 +23,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # For development, restrict this in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Add error handling middleware
 @app.middleware("http")
