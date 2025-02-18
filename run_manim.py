@@ -12,16 +12,28 @@ def run_manim(scene_file):
     
     try:
         # Use sys.executable to ensure we use the Python from the virtual environment
-        result = subprocess.run(
+        process = subprocess.Popen(
             [sys.executable, "-m", "manim", "-ql", scene_file],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            check=True
+            bufsize=1,
+            universal_newlines=True
         )
-        print(result.stdout)
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error running Manim:\n{e.stdout}\n{e.stderr}")
+        
+        # Stream output in real-time
+        while True:
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                print(output.strip())
+                
+        return_code = process.poll()
+        return return_code == 0
+        
+    except Exception as e:
+        print(f"Error running Manim: {str(e)}")
         return False
 
 if __name__ == "__main__":

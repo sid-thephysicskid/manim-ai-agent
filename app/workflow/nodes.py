@@ -329,7 +329,6 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
     logger = setup_question_logger(state["user_input"])
     logger.info("Executing Manim code")
     
-    # Generate file name in the generated folder
     scene_file = generate_scene_filename(state['user_input'])
     logger.info(f"Writing code to file: {scene_file}")
     
@@ -339,16 +338,31 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         logger.info(f"Running Manim with quality setting: {MANIM_QUALITY}")
-        result = subprocess.run(
+        # Use Popen instead of run for real-time output streaming
+        process = subprocess.Popen(
             ["manim", MANIM_QUALITY, scene_file, "--media_dir", "/app/media"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=EXECUTION_TIMEOUT,
-            cwd=os.getcwd()
+            bufsize=1,
+            universal_newlines=True
         )
         
-        if result.returncode != 0:
-            error_msg = f"Manim execution failed:\nSTDOUT: {result.stdout}\nSTDERR: {result.stderr}"
+        output_lines = []
+        # Stream output in real-time
+        while True:
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                line = output.strip()
+                logger.info(line)  # Log each line in real-time
+                output_lines.append(line)
+                
+        return_code = process.poll()
+        
+        if return_code != 0:
+            error_msg = f"Manim execution failed:\n" + "\n".join(output_lines)
             logger.error(error_msg)
             output_state = {**state, "error": error_msg, "current_stage": "execute"}
             return log_state_transition("execute_code", state, output_state)
@@ -359,23 +373,23 @@ def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
         for file in os.listdir("/app/media/videos"):
             if file.endswith(".mp4"):
                 video_file = f"/app/media/videos/{file}"
-                video_url = f"/api/video/{file}"  # URL for frontend
+                video_url = f"/api/video/{file}"
                 break
         
         logger.info("Manim execution completed successfully.")
         output = {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode,
+            "stdout": "\n".join(output_lines),
+            "returncode": return_code,
             "scene_file": scene_file,
-            "scene_url": f"/api/code/{os.path.basename(scene_file)}",  # Code URL
+            "scene_url": f"/api/code/{os.path.basename(scene_file)}",
             "video_file": video_file,
-            "video_url": video_url  # Video URL
+            "video_url": video_url
         }
         logger.info(f"Scene file preserved at: {scene_file}")
         logger.info(f"Video file generated at: {video_file}")
         output_state = {**state, "execution_result": output, "error": None, "current_stage": "execute"}
         return log_state_transition("execute_code", state, output_state)
+        
     except Exception as e:
         error_msg = f"Execution failed: {str(e)}"
         _, _, tb = sys.exc_info()
