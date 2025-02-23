@@ -45,11 +45,7 @@ class GCFCalculationScene(ManimVoiceoverBase):
             "The GCF is the largest number that can divide both numbers without leaving a remainder."
         )) as tracker:
             self.play(Write(title), Write(subtitle), run_time=tracker.duration)
-        # Fade out all mobjects except the background
-        self.play(
-            *[FadeOut(mob)for mob in self.mobjects if mob != self.background]
-        )
-
+        self.fade_out_scene()
     def listing_factors_scene(self):
         """Scene 2: List the factors of two numbers and highlight the common ones."""
         # We will use the numbers 18 and 24.
@@ -108,17 +104,14 @@ class GCFCalculationScene(ManimVoiceoverBase):
             "The numbers that appear in both lists are 1, 2, 3, and 6. "
             "Since 6 is the largest number common to both, the GCF is 6."
         )) as tracker:
-            self.play(Write(groups), run_time=tracker.duration * 0.8)
+            self.play(Write(groups), run_time=tracker.duration)
     
         # Highlight the GCF
         rect_18 = SurroundingRectangle(gcf_mob_18, buff=0.1, color=RED)
         rect_24 = SurroundingRectangle(gcf_mob_24, buff=0.1, color=RED)
         self.play(Create(rect_18), Create(rect_24), run_time=1)
         
-        # Fade out all mobjects except the background
-        self.play(
-            *[FadeOut(mob)for mob in self.mobjects if mob != self.background]
-        )
+        self.fade_out_scene()
 
     def summary_scene(self):
         """Scene 3: Recap the process with a summary of the steps."""
@@ -136,10 +129,7 @@ class GCFCalculationScene(ManimVoiceoverBase):
             "To summarize, first list all factors of each number. Then, identify the factors that are common to both numbers. "
             "The largest of these common factors is the Greatest Common Factor."
         )) as tracker:
-            self.play(Write(summary_title), run_time=tracker.duration/3)
-            self.play(Write(bullet_points), run_time=tracker.duration*2/3)
+            self.play(Write(summary_title), run_time=tracker.duration)
+            self.play(Write(bullet_points), run_time=tracker.duration)
 
-        # Fade out all mobjects except the background
-        self.play(
-            *[FadeOut(mob)for mob in self.mobjects if mob != self.background]
-        )
+        self.fade_out_scene()

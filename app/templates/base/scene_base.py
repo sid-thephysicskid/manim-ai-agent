@@ -16,7 +16,7 @@ class ManimVoiceoverBase(VoiceoverScene):
         # Setup voice service
         self.set_speech_service(
             OpenAIService(
-                voice="onyx",
+                voice="nova",
                 model="tts-1-hd"
             )
         )
@@ -65,4 +65,8 @@ class ManimVoiceoverBase(VoiceoverScene):
         elif group.get_top()[1] > top_boundary:
             shift_y = top_boundary - group.get_top()[1]
             
-        group.shift(RIGHT * shift_x + UP * shift_y) 
+        group.shift(RIGHT * shift_x + UP * shift_y)
+
+    def fade_out_scene(self):
+        """Fade out all mobjects except the background."""
+        self.play(*[FadeOut(mob) for mob in self.mobjects if mob != self.background]) 

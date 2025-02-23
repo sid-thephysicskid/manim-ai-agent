@@ -11,6 +11,7 @@ langgraph
 python-dotenv
 uvicorn
 sendgrid
+python-json-logger
 # Test dependencies
 pytest
 pytest-asyncio
@@ -19,3 +20,4 @@ rich
 
 ipython
 cachetools
+black

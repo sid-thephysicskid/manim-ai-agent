@@ -13,7 +13,7 @@ def run_manim(scene_file):
     try:
         # Use sys.executable to ensure we use the Python from the virtual environment
         process = subprocess.Popen(
-            [sys.executable, "-m", "manim", "-ql", scene_file],
+            [sys.executable, "-m", "manim", "-qh", scene_file],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

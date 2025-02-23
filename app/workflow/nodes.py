@@ -5,7 +5,8 @@ import py_compile
 import re
 import sys
 import traceback
-from typing import Dict, Any
+import logging
+from typing import Dict, Any, Optional
 from pathlib import Path
 from langsmith import traceable
 from openai import OpenAI
@@ -17,16 +18,28 @@ from app.core.config import (
     MANIM_QUALITY, 
     EXECUTION_TIMEOUT,
     VALID_COLORS,
-    ERROR_CACHE
+    ERROR_CACHE,
+    GENERATED_DIR,
+    BASE_DIR
 )
 from app.workflow.utils import (
     log_state_transition,
-    setup_question_logger,
+    # setup_question_logger,
     generate_scene_filename,
     create_temp_dir
 )
+from black import format_str, FileMode
 
 client = OpenAI()
+
+SCENE_PLANNING_PROMPT = """Plan a Khan Academy-style animation to explain the concept. 
+Break it down into clear scenes that:
+1. Introduce the concept
+2. Show step-by-step visual explanations
+3. Include practical examples
+4. End with a summary
+
+Each scene should have clear objectives and specific animation notes."""
 
 def log_state_transition(node_name: str, input_state: GraphState, output_state: GraphState) -> GraphState:
     """Log state transitions for debugging and monitoring."""
@@ -43,7 +56,7 @@ def get_manim_api_context() -> str:
         with open(api_file, "r") as f:
             return f.read()
     except FileNotFoundError:
-        return "Manim API v0.19.0 - Basic shapes and transformations"
+        raise FileNotFoundError(f"Required Manim API documentation not found at {api_file}")
 
 def read_gcf_example() -> str:
     """Read the GCF example from templates."""
@@ -54,8 +67,8 @@ def read_gcf_example() -> str:
         return ""
 
 @traceable(name="plan_scenes")
-def plan_scenes(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate lesson plan using LLM."""
+def plan_scenes(state: GraphState, **kwargs) -> GraphState:
+    """Plan the scenes based on user input."""
     logger = setup_question_logger(state["user_input"])
     logger.info(f"Planning scenes for input: {state['user_input']}")
     
@@ -63,20 +76,34 @@ def plan_scenes(state: Dict[str, Any]) -> Dict[str, Any]:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{
+                "role": "system",
+                "content": SCENE_PLANNING_PROMPT
+            }, {
                 "role": "user",
-                "content": f"Create detailed Manim lesson plan for: {state['user_input']}\n"
-                           "Include 3-5 scenes with animation types (Create, Transform, etc.)\n"
-                           "Format: bullet points with scene objectives and animation notes"
+                "content": state["user_input"]
             }]
         )
-        plan = response.choices[0].message.content
-        output_state = {**state, "plan": plan, "current_stage": "plan"}
-        return log_state_transition("plan_scenes", state, output_state)
+        
+        return GraphState(
+            user_input=state["user_input"],
+            plan=response.choices[0].message.content,
+            generated_code=None,
+            execution_result=None,
+            error=None,
+            current_stage="plan",
+            correction_attempts=0
+        )
+        
     except Exception as e:
-        error_msg = f"Failed to generate scene plan: {str(e)}"
-        logger.error(error_msg)
-        output_state = {**state, "error": error_msg, "current_stage": "plan"}
-        return log_state_transition("plan_scenes", state, output_state)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=None,
+            generated_code=None,
+            execution_result=None,
+            error=f"Scene planning failed: {str(e)}",
+            current_stage="plan",
+            correction_attempts=0
+        )
 
 def _get_voiceover_template() -> str:
     """Get the template for proper voiceover structure."""
@@ -89,78 +116,66 @@ def _get_voiceover_template() -> str:
             # run_time=tracker.duration
 '''
 
-def _get_code_generation_prompt(state: Dict[str, Any], api_context: str) -> str:
+def _get_code_generation_prompt(state: Dict[str, Any], api_context: str, code_template: str) -> str:
     """Generate the base prompt for code generation."""
-    voiceover_example = _get_voiceover_template().format(
-        text="This is an example voiceover text",
-        animation_code="self.play(Write(text), run_time=tracker.duration)"
-    )
-    
     return f"""
-    Generate Manim code to explain {state['user_input']} by following the plan and the rules below.
+    Generate Manim code to explain "{state['user_input']}" in Khan Academy style, step by step, by following the plan and the rules below.
     Plan: {state['plan']}
-    Generate complete, working code that implements this plan.
+    Generate complete, working code that implements this plan in the following format:
+    {code_template}
+
     VOICEOVER RULES (MUST FOLLOW EXACTLY):
     1. Every animation must be wrapped in a voiceover block using this exact pattern:
-        with self.voiceover(text="Your narration here") as tracker:
-            self.play(Your_Animation_Here, run_time=tracker.duration)
-    
-    2. Never use self.voiceover() directly without a 'with' statement 
-    3. Use tracker.duration to sync animation timing
-    4. Split long narrations into multiple voiceover blocks   
-    5. Each animation sequence should have its own voiceover block with appropriate narration
-    
+         with self.voiceover(text="Your narration here") as tracker:
+             self.play(Your_Animation_Here, run_time=tracker.duration)
+    2. Never use self.voiceover() directly without a 'with' statement.
+    3. Use tracker.duration to sync animation timing.
+    4. Split long narrations into multiple voiceover blocks.
+    5. Each animation sequence should have its own voiceover block with appropriate narration.
+
     BASE CLASS RULES (MUST INHERIT FROM THIS CLASS):
-    Make sure to inherit from ManimVoiceoverBase. This base class provides:
-    
-    1. Background image setup and Voice service configuration
-    2. Helper methods:
-       - create_title(text): Creates properly sized titles, handles math notation
-       - ensure_group_visible(group, margin): Ensures VGroups fit in frame
-    
-    The scene should use these methods appropriately. For example:
-    - Use create_title() for section headings
-    - Use ensure_group_visible() for complex arrangements
-    - Background and voice are auto-configured in __init__
+    Inherit from ManimVoiceoverBase which sets up:
+      - Custom background and voice service.
+      - Helper methods:
+             create_title(text)
+             ensure_group_visible(group, margin)
+             fade_out_scene()  # Use fade_out_scene() for scene cleanup.
+
+    SCENE STRUCTURE RULES:
+      - Every scene method (i.e., a method whose name ends with _scene) must end with a call to self.fade_out_scene().
+      - The construct() method should call these scene methods in the desired order.
+
+    DO NOT USE self.clear() anywhere in the code.
+    Please look at Manim's documentation for more information on the API: {api_context}
     """
 
 def _get_example_code(code_template: str) -> str:
     """Get example code from gcf.py or fallback to template."""
+    example_file = Path("app/templates/examples/gcf.py")
     try:
-        with open("gcf.py", "r") as f:
+        with open(example_file, "r") as f:
             return f.read()
-    except FileNotFoundError:
-        return code_template
-def _sanitize_generated_code(code: str) -> str:
-    """Minimal sanitization for non-semantic issues."""
-    # Only handle truly safe transformations like whitespace and comments
-    return '\n'.join([line for line in code.split('\n') if not line.strip().startswith('!')])
+    except FileNotFoundError as e:
+        logging.error(f"Example file '{example_file}' not found. Aborting code generation.")
+        raise e
 
-# def _sanitize_generated_code(code: str) -> str:
-#     """Clean and validate the generated code."""
-#     # Remove lines starting with '!'
-#     code = '\n'.join([line for line in code.split('\n') if not line.strip().startswith('!')])
+def _sanitize_generated_code(code: str) -> str:
+    """
+    Clean and validate the generated code.
+    Specifically, fix calls to set_color that use an unquoted color name.
+    """
+    # Replace .set_color(blue) with .set_color("blue")
+    # This regex looks for a set_color call whose first argument is not quoted.
+    code = re.sub(
+        r'\.set_color\(\s*(?![\'"])([A-Za-z_]+)\s*\)',
+        lambda m: f'.set_color("{m.group(1).lower()}")',
+        code
+    )
     
-#     # Fix color syntax
-#     code = re.sub(r'\.set_color\(([A-Z]+)\)',
-#                   lambda m: f'.set_color("{m.group(1).lower()}")', code)
+    # (Optional) Add other sanitization steps – for example, remove unwanted lines,
+    # format the code, or fix voiceover block usages.
     
-#     # Add return type hints
-#     code = re.sub(
-#         r'(def (?!__init__|construct)(\w+)\(self(?!, color: str)\))(\s*:)',
-#         r'\1 -> None\3',
-#         code
-#     )
-    
-#     # Fix direct voiceover calls
-#     code = re.sub(
-#         r'self\.voiceover\((.*?)\)\s*\n\s*self\.play\((.*?)\)',
-#         lambda m: f'with self.voiceover({m.group(1)}) as tracker:\n            self.play({m.group(2)}, run_time=tracker.duration)',
-#         code,
-#         flags=re.DOTALL
-#     )
-    
-#     return code
+    return code
 
 @traceable(name="generate_code")
 def generate_code(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,9 +185,7 @@ def generate_code(state: Dict[str, Any]) -> Dict[str, Any]:
     api_context = get_manim_api_context()
     
     try:
-        # Get base prompt
-        prompt = _get_code_generation_prompt(state, api_context)
-        
+       
         # Get code template and example
         code_template = '''from manim import *
 from app.templates.base.scene_base import ManimVoiceoverBase
@@ -189,11 +202,11 @@ class {ClassName}(ManimVoiceoverBase):
         """Scene execution order"""
         {scene_calls}
     
-    # SCENES (each scene must end with self.play(
-            *[FadeOut(mob)for mob in self.mobjects if mob != self.background]
+    # SCENES (each scene must end with self.fade_out_scene()
         ))
     {scene_methods}
 '''
+        prompt = _get_code_generation_prompt(state, api_context, code_template)
         gcf_example = _get_example_code(code_template)
         
         # Generate code using OpenAI
@@ -204,45 +217,9 @@ class {ClassName}(ManimVoiceoverBase):
                 "content": f"""{prompt}
                 Use the following example as a guide:
 {gcf_example}
-IMPORTANT: Only use the following colors exactly as defined: {', '.join(VALID_COLORS)}. Do not invent or use any other color names.
+IMPORTANT: Only use the following colors: {', '.join(VALID_COLORS)}. Do not invent or use any other color names.
+Ensure that any color parameters passed to set_color are provided as string literals (e.g., set_color('blue')) and not as bare identifiers.”
 
-RULES ENFORCED(MUST OBEY):
-1. MATH RULES:
-   - Use MathTex for mathematical content: fractions, Greek letters, operators, sub/superscripts.
-   - Format: r"\\frac{{1}}{{2}}" not r"$\\frac{{1}}{{2}}$".
-   - Never use Text/Tex for math content.
-2. SCENE STRUCTURE:
-   - Every scene method must end with self.clear() or include FadeOut.
-   - Suffix scene methods with _scene.
-   - The construct() method must call the scene methods in order.
-3. GENERATE CODE STRUCTURE:
-   - Class name should reflect the topic.
-   - Include between 3 and 5 scene methods.
-   - Helper methods and all functions must include type hints.
-4. PARAMETER VALIDATION:
-   - Helper methods must be properly type-hinted.
-   - Return type hints are required for all methods.
-   - Validate and adjust mobject positions with ensure_group_visible().
-5. VALIDATE AGAINST:
-   ❌ Text with math symbols.
-   ❌ Color type annotations (use string color names).
-   ❌ Missing scene cleanup.
-6. LAYOUT & ALIGNMENT RULES:
-   - Use Manim's built-in alignment utilities (e.g., align_to, next_to, VGroup().arrange(DOWN, buff=0.5)) to avoid overlapping visuals.
-   - Ensure all objects are clearly visible and appropriately spaced.
-   - For layering, explicitly set foreground elements using self.add_foreground_mobjects() where needed.
-   - Apply structured arrangement for clear and well-organized scenes.
-7. VISUAL CONTENT RULES:
-   - Do not import any assets like SVGs or images.
-   - Incorporate as many valid, constructive visual elements as possible to teach the concept.
-   - Use visual objects from the Manim API (e.g., Polygon, RegularPolygon, Star, Rectangle, Square, RoundedRectangle) as defined in {api_context}.
-   - Ensure that visuals are relevant, well-aligned, and enhance explanation. For example, include diagrams, charts, or geometric shapes that illustrate the topic.
-   - If the lesson concept can benefit from a visualization, include at least one visual element to reinforce the narrative.
-   - Validate that objects are constructed with valid parameters according to the latest Manim API (e.g., when creating a Square, ensure its parameters match those in Manim Community v0.19.0).
-
-
-OUTPUT FORMAT:
-{code_template}
 """
             }]
         )
@@ -269,201 +246,238 @@ OUTPUT FORMAT:
         }
 
 @traceable(name="validate_code")
-def validate_code(state: Dict[str, Any]) -> Dict[str, Any]:
+def validate_code(state: GraphState, config: Optional[Dict[str, Any]] = None, **kwargs) -> GraphState:
     """Validate the generated code."""
     logger = setup_question_logger(state["user_input"])
     logger.info("Validating generated code")
     
-    if not state.get("generated_code"):
-        return {**state, "error": "No code to validate"}
-    
     try:
-        # Parse the code to AST
-        tree = ast.parse(state["generated_code"])
+        if not state["generated_code"]:
+            return GraphState(
+                user_input=state["user_input"],
+                plan=state["plan"],
+                generated_code=None,
+                execution_result=None,
+                error="No code to validate",
+                current_stage="validate",
+                correction_attempts=state.get("correction_attempts", 0)
+            )
+            
+        # Log the code being validated
+        logger.info(f"Validating code:\n{state['generated_code']}")
         
-        # Find the scene class
-        scene_class = None
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                scene_class = node
-                break
+        # Validate code using ast
+        ast.parse(state["generated_code"])
         
-        if not scene_class:
-            return {**state, "error": "No scene class found"}
+        # Additional Manim-specific validation
+        if "class" not in state["generated_code"] or "Scene" not in state["generated_code"]:
+            raise ValueError("Code must define a Scene class")
         
-        # Check inheritance
-        valid_bases = {"VoiceoverScene", "ManimVoiceoverBase"}
-        has_valid_base = False
-        for base in scene_class.bases:
-            if isinstance(base, ast.Name) and base.id in valid_bases:
-                has_valid_base = True
-                break
-        
-        if not has_valid_base:
-            return {**state, "error": "Scene must inherit from VoiceoverScene or ManimVoiceoverBase"}
-        
-        # Add voiceover pattern validation
-        if "with self.voiceover" not in state["generated_code"]:
-            return {**state, "error": "Missing required voiceover pattern: 'with self.voiceover(...) as tracker:'"}
-        
-        # Check for proper voiceover usage
-        scene_methods = re.findall(r'def \w+_scene.*?(?=def|\Z)', state["generated_code"], re.DOTALL)
-        for method in scene_methods:
-            if "self.voiceover" in method and "with" not in method:
-                return {**state, "error": "Incorrect voiceover usage. Must use 'with' statement pattern."}
-        
-        # Code passed all validations
-        output_state = {
-            **state,
-            "current_stage": "validation_passed"
-        }
-        return log_state_transition("validate_code", state, output_state)
+        if "def construct(self)" not in state["generated_code"]:
+            raise ValueError("Scene class must have a construct method")
+            
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result=None,
+            error=None,
+            current_stage="validate",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
         
     except Exception as e:
-        logger.error(f"Validation error: {str(e)}")
-        return {**state, "error": str(e)}
+        error_msg = f"Code validation failed: {str(e)}\nCode:\n{state['generated_code']}"
+        logger.error(error_msg)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result=None,
+            error=error_msg,
+            current_stage="validate",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
 
 @traceable(name="execute_code")
-def execute_code(state: Dict[str, Any]) -> Dict[str, Any]:
+def execute_code(state: GraphState, **kwargs) -> GraphState:
     """Execute Manim code and capture the output."""
     logger = setup_question_logger(state["user_input"])
     logger.info("Executing Manim code")
     
-    scene_file = generate_scene_filename(state['user_input'])
-    logger.info(f"Writing code to file: {scene_file}")
-    
-    with open(scene_file, 'w') as f:
-        f.write(state['generated_code'])
-    logger.info(f"Saved generated code to: {scene_file}")
-    
     try:
-        logger.info(f"Running Manim with quality setting: {MANIM_QUALITY}")
-        # Use Popen instead of run for real-time output streaming
+        # Use environment-aware paths from config
+        media_dir = GENERATED_DIR / "media"
+        media_dir.mkdir(exist_ok=True, parents=True)
+        (media_dir / "videos").mkdir(exist_ok=True)
+        (media_dir / "images").mkdir(exist_ok=True)
+        
+        scene_file = generate_scene_filename(state['user_input'])
+        scene_path = GENERATED_DIR / scene_file
+        
+        with open(scene_path, 'w') as f:
+            f.write(state['generated_code'])
+        
         process = subprocess.Popen(
-            ["manim", MANIM_QUALITY, scene_file, "--media_dir", "/app/media"],
+            ["manim", "-ql", str(scene_path), "--media_dir", str(media_dir)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
-            universal_newlines=True
+            universal_newlines=True,
+            env={
+                **os.environ,
+                "PYTHONPATH": str(BASE_DIR)
+            }
         )
         
         output_lines = []
-        # Stream output in real-time
         while True:
             output = process.stdout.readline()
             if output == '' and process.poll() is not None:
                 break
             if output:
-                line = output.strip()
-                logger.info(line)  # Log each line in real-time
-                output_lines.append(line)
+                logger.info(output.strip())
+                output_lines.append(output.strip())
                 
         return_code = process.poll()
         
         if return_code != 0:
-            error_msg = f"Manim execution failed:\n" + "\n".join(output_lines)
-            logger.error(error_msg)
-            output_state = {**state, "error": error_msg, "current_stage": "execute"}
-            return log_state_transition("execute_code", state, output_state)
+            return GraphState(
+                user_input=state["user_input"],
+                plan=state["plan"],
+                generated_code=state["generated_code"],
+                execution_result=None,
+                error=f"Manim execution failed:\n" + "\n".join(output_lines),
+                current_stage="execute",
+                correction_attempts=state.get("correction_attempts", 0)
+            )
         
-        # Find the generated video file
-        video_file = None
+        # Find video file for result
         video_url = None
-        for file in os.listdir("/app/media/videos"):
+        for file in os.listdir(os.path.join(media_dir, "videos")):
             if file.endswith(".mp4"):
-                video_file = f"/app/media/videos/{file}"
                 video_url = f"/api/video/{file}"
                 break
         
-        logger.info("Manim execution completed successfully.")
-        output = {
-            "stdout": "\n".join(output_lines),
-            "returncode": return_code,
-            "scene_file": scene_file,
-            "scene_url": f"/api/code/{os.path.basename(scene_file)}",
-            "video_file": video_file,
-            "video_url": video_url
-        }
-        logger.info(f"Scene file preserved at: {scene_file}")
-        logger.info(f"Video file generated at: {video_file}")
-        output_state = {**state, "execution_result": output, "error": None, "current_stage": "execute"}
-        return log_state_transition("execute_code", state, output_state)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result={"output": output_lines, "video_url": video_url},
+            error=None,
+            current_stage="execute",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
         
     except Exception as e:
-        error_msg = f"Execution failed: {str(e)}"
-        _, _, tb = sys.exc_info()
-        line_no = traceback.extract_tb(tb)[-1].lineno
-        error_msg += f"\nNear generated code line: {line_no}"
-        
-        output_state = {**state, "error": error_msg, "current_stage": "execute"}
-        return log_state_transition("execute_code", state, output_state)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result=None,
+            error=f"Execution failed: {str(e)}",
+            current_stage="execute",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
 
 @traceable(name="error_correction")
-def error_correction(state: Dict[str, Any]) -> Dict[str, Any]:
+def error_correction(state: GraphState, config: Optional[Dict[str, Any]] = None, **kwargs) -> GraphState:
     """Correct code based on error message."""
     logger = setup_question_logger(state["user_input"])
-    logger.info(f"Attempting to fix error: {state.get('error')}")
-    
+    logger.info(f"Attempting to fix error (attempt {state.get('correction_attempts', 0) + 1}): {state.get('error')}")
+    manim_api_context = get_manim_api_context()
     try:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{
                 "role": "system",
-                "content": """You are an expert Manim developer. Fix the code based on 
-                the error message while maintaining the original animation intent."""
+                "content": f"""You are an expert Manim developer. Fix the code based on 
+                the error message while maintaining the original animation intent.
+                
+                Requirements:
+                1. Code must define a Scene class that inherits from  ManimVoiceoverBas
+                2. Use only valid Manim methods and attributes from the following API documentation: {manim_api_context}
+                3. Follow proper Python syntax
+                """
             }, {
                 "role": "user",
                 "content": f"""Fix this Manim code that generated an error:
                 Error: {state['error']}
                 
                 Original code:
-                {state['generated_code']}"""
+                {state['generated_code']}
+                
+                Original plan:
+                {state['plan']}
+                
+                IMPORTANT: Only use the following colors exactly as defined: {', '.join(VALID_COLORS)}"""
             }]
         )
         
         corrected_code = response.choices[0].message.content
-        output_state = {
-            **state,
-            "generated_code": corrected_code,
-            "current_stage": "validate",
-            "correction_attempts": state.get("correction_attempts", 0) + 1,
-            "error": None
-        }
-        return log_state_transition("error_correction", state, output_state)
+        logger.info(f"Generated correction:\n{corrected_code}")
+        
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=corrected_code,
+            execution_result=None,
+            error=None,
+            current_stage="validate",
+            correction_attempts=state.get("correction_attempts", 0) + 1
+        )
         
     except Exception as e:
-        logger.error(f"Error in correction: {str(e)}")
-        return {**state, "error": str(e)}
+        error_msg = f"Error correction failed: {str(e)}"
+        logger.error(error_msg)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result=None,
+            error=error_msg,
+            current_stage="error_correction",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
 
 @traceable(name="lint_code")
-def lint_code(state: Dict[str, Any]) -> Dict[str, Any]:
+def lint_code(state: GraphState) -> GraphState:
     """Lint and format the generated code."""
     logger = setup_question_logger(state["user_input"])
-    logger.info("Linting generated code")
     
     if not state.get("generated_code"):
-        return {**state, "error": "No code to lint"}
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=None,
+            execution_result=None,
+            error="No code to lint",
+            current_stage="lint",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
     
     try:
-        # Basic linting checks
-        code = state["generated_code"]
+        # Format code using black
+        code = format_str(state["generated_code"], mode=FileMode())
         
-        # Check color usage
-        for color in VALID_COLORS:
-            if color.upper() in code:
-                code = code.replace(color.upper(), f'"{color}"')
-        
-        # Ensure proper whitespace
-        code = code.replace("\t", "    ")
-        
-        output_state = {
-            **state,
-            "generated_code": code,
-            "current_stage": "lint_passed"
-        }
-        return log_state_transition("lint_code", state, output_state)
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=code,
+            execution_result=None,
+            error=None,
+            current_stage="lint_passed",
+            correction_attempts=state.get("correction_attempts", 0)
+        )
         
     except Exception as e:
-        logger.error(f"Linting error: {str(e)}")
-        return {**state, "error": str(e)}
+        return GraphState(
+            user_input=state["user_input"],
+            plan=state["plan"],
+            generated_code=state["generated_code"],
+            execution_result=None,
+            error=f"Linting failed: {str(e)}",
+            current_stage="lint",
+            correction_attempts=state.get("correction_attempts", 0)
+        )

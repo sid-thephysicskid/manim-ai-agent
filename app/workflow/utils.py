@@ -61,35 +61,35 @@ def generate_scene_filename(topic: str) -> str:
     filename = f"{concept}_{timestamp}.py"
     return str(GENERATED_DIR / filename)
 
-def setup_question_logger(question: str) -> logging.Logger:
-    """Set up a dedicated logger for each question."""
-    safe_name = re.sub(r'[^\w\s-]', '', question.lower())
-    safe_name = re.sub(r'[-\s]+', '_', safe_name)
-    timestamp = RUN_TIMESTAMP
-    log_file = LOGS_DIR / f"{safe_name}_{timestamp}.log"
+# def setup_question_logger(question: str) -> logging.Logger:
+#     """Set up a dedicated logger for each question."""
+#     safe_name = re.sub(r'[^\w\s-]', '', question.lower())
+#     safe_name = re.sub(r'[-\s]+', '_', safe_name)
+#     timestamp = RUN_TIMESTAMP
+#     log_file = LOGS_DIR / f"{safe_name}_{timestamp}.log"
     
-    logger = logging.getLogger(f"question_{safe_name}")
-    logger.setLevel(logging.INFO)
+#     logger = logging.getLogger(f"question_{safe_name}")
+#     logger.setLevel(logging.INFO)
     
-    # Remove existing handlers
-    logger.handlers = []
+#     # Remove existing handlers
+#     logger.handlers = []
     
-    # Add file handler
-    fh = logging.FileHandler(log_file)
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    logger.addHandler(fh)
+#     # Add file handler
+#     fh = logging.FileHandler(log_file)
+#     fh.setLevel(logging.INFO)
+#     fh.setFormatter(logging.Formatter(
+#         '%(asctime)s - %(levelname)s - %(message)s',
+#         datefmt='%Y-%m-%d %H:%M:%S'
+#     ))
+#     logger.addHandler(fh)
     
-    # Add console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    logger.addHandler(ch)
+#     # Add console handler
+#     ch = logging.StreamHandler()
+#     ch.setLevel(logging.INFO)
+#     ch.setFormatter(logging.Formatter(
+#         '%(asctime)s - %(levelname)s - %(message)s',
+#         datefmt='%Y-%m-%d %H:%M:%S'
+#     ))
+#     logger.addHandler(ch)
     
-    return logger 
+#     return logger 
